@@ -1,0 +1,6 @@
+/.work/
+/dist/
+/downloaded-assets/
+*.deb
+*.tar.gz
+*.log

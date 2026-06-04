@@ -1,0 +1,122 @@
+name: Release binaries
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Upstream release tag to build, for example 1.12.2. Leave blank to discover missing releases."
+        required: false
+        type: string
+      max_releases:
+        description: "Maximum missing upstream releases to build during discovery."
+        required: false
+        default: "10"
+        type: string
+      include_prereleases:
+        description: "Include upstream prereleases during discovery."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM_REPOSITORY: apple/swift-openapi-generator
+  UPSTREAM_URL: https://github.com/apple/swift-openapi-generator.git
+  # This distribution repository starts tracking upstream releases at the
+  # release current when it was created. Manual runs can still build older tags.
+  MIN_UPSTREAM_VERSION: "1.12.2"
+  SWIFT_VERSION: "6.1"
+
+jobs:
+  discover:
+    name: Discover releases
+    runs-on: ubuntu-24.04
+    outputs:
+      has_releases: ${{ steps.discover.outputs.has_releases }}
+      versions: ${{ steps.discover.outputs.versions }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Discover upstream releases
+        id: discover
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version || '' }}
+          MAX_RELEASES: ${{ inputs.max_releases || '10' }}
+          INCLUDE_PRERELEASES: ${{ inputs.include_prereleases || 'false' }}
+        run: scripts/discover-releases.sh
+
+  build:
+    name: Build ${{ matrix.version }} ${{ matrix.target.platform }}
+    needs: discover
+    if: needs.discover.outputs.has_releases == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.discover.outputs.versions) }}
+        target:
+          - platform: darwin-arm64
+            runner: macos-15
+            deb_arch: ""
+          - platform: linux-x86_64
+            runner: ubuntu-22.04
+            deb_arch: amd64
+          - platform: linux-aarch64
+            runner: ubuntu-22.04-arm
+            deb_arch: arm64
+    runs-on: ${{ matrix.target.runner }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: ${{ env.SWIFT_VERSION }}
+
+      - name: Build and package
+        env:
+          VERSION: ${{ matrix.version }}
+          PLATFORM: ${{ matrix.target.platform }}
+          DEB_ARCH: ${{ matrix.target.deb_arch }}
+        run: scripts/build-release.sh "$VERSION" "$PLATFORM" "$DEB_ARCH"
+
+      - name: Upload packaged assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-${{ matrix.version }}-${{ matrix.target.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish ${{ matrix.version }}
+    needs:
+      - discover
+      - build
+    if: needs.discover.outputs.has_releases == 'true'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.discover.outputs.versions) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Download packaged assets
+        uses: actions/download-artifact@v5
+        with:
+          pattern: release-assets-${{ matrix.version }}-*
+          path: downloaded-assets
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ matrix.version }}
+        run: scripts/publish-release.sh "$VERSION" downloaded-assets
