@@ -34,6 +34,6 @@ Manual `version` runs can build older upstream tags even though scheduled discov
 
 ## Packaging Notes
 
-Linux binaries are built on Ubuntu 22.04 runners with `--static-swift-stdlib`, then wrapped in `.deb` packages that install `/usr/bin/swift-openapi-generator`.
+Linux binaries are built in the official multi-arch Swift `6.1.3-jammy` container on Ubuntu 22.04 runners with `--static-swift-stdlib`, then wrapped in `.deb` packages that install `/usr/bin/swift-openapi-generator`.
 
 The upstream project is Apache-2.0 licensed. Release archives and Debian packages include Apple’s upstream `LICENSE.txt` and `CONTRIBUTORS.txt`.
