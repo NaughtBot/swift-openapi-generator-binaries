@@ -37,6 +37,7 @@ jobs:
     outputs:
       has_releases: ${{ steps.discover.outputs.has_releases }}
       versions: ${{ steps.discover.outputs.versions }}
+      releases: ${{ steps.toolchains.outputs.releases }}
     steps:
       - name: Check out repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -50,25 +51,38 @@ jobs:
           INCLUDE_PRERELEASES: ${{ inputs.include_prereleases || 'false' }}
         run: scripts/discover-releases.sh
 
+      - name: Resolve upstream Swift requirements
+        id: toolchains
+        if: steps.discover.outputs.has_releases == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSIONS: ${{ steps.discover.outputs.versions }}
+        run: python3 scripts/resolve-toolchains.py "$VERSIONS"
+
   build-darwin:
-    name: Build ${{ matrix.version }} darwin-arm64
+    name: Build ${{ matrix.release.version }} darwin-arm64
     needs: discover
     if: needs.discover.outputs.has_releases == 'true'
     strategy:
       fail-fast: false
       matrix:
-        version: ${{ fromJSON(needs.discover.outputs.versions) }}
+        release: ${{ fromJSON(needs.discover.outputs.releases) }}
     runs-on: macos-15
     steps:
       - name: Check out repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Install upstream Swift toolchain
+        uses: swift-actions/setup-swift@7ca6abe6b3b0e8b5421b88be48feee39cbf52c6a # v2
+        with:
+          swift-version: ${{ matrix.release.swift_version }}
 
       - name: Show Swift version
         run: swift --version
 
       - name: Build and package
         env:
-          VERSION: ${{ matrix.version }}
+          VERSION: ${{ matrix.release.version }}
           PLATFORM: darwin-arm64
           DEB_ARCH: ""
         run: scripts/build-release.sh "$VERSION" "$PLATFORM" "$DEB_ARCH"
@@ -76,18 +90,18 @@ jobs:
       - name: Upload packaged assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: release-assets-${{ matrix.version }}-darwin-arm64
+          name: release-assets-${{ matrix.release.version }}-darwin-arm64
           path: dist/*
           if-no-files-found: error
 
   build-linux:
-    name: Build ${{ matrix.version }} ${{ matrix.target.platform }}
+    name: Build ${{ matrix.release.version }} ${{ matrix.target.platform }}
     needs: discover
     if: needs.discover.outputs.has_releases == 'true'
     strategy:
       fail-fast: false
       matrix:
-        version: ${{ fromJSON(needs.discover.outputs.versions) }}
+        release: ${{ fromJSON(needs.discover.outputs.releases) }}
         target:
           - platform: linux-x86_64
             runner: ubuntu-22.04
@@ -97,7 +111,7 @@ jobs:
             deb_arch: arm64
     runs-on: ${{ matrix.target.runner }}
     container:
-      image: docker.io/library/swift:6.1.3-jammy@sha256:faa16c1b31fa66261d475d296e1d94cf7fe99ad4b6b1bb49ade0d6769812acda
+      image: ${{ matrix.release.swift_image }}
     steps:
       - name: Check out repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -110,7 +124,7 @@ jobs:
 
       - name: Build and package
         env:
-          VERSION: ${{ matrix.version }}
+          VERSION: ${{ matrix.release.version }}
           PLATFORM: ${{ matrix.target.platform }}
           DEB_ARCH: ${{ matrix.target.deb_arch }}
         run: scripts/build-release.sh "$VERSION" "$PLATFORM" "$DEB_ARCH"
@@ -118,12 +132,12 @@ jobs:
       - name: Upload packaged assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: release-assets-${{ matrix.version }}-${{ matrix.target.platform }}
+          name: release-assets-${{ matrix.release.version }}-${{ matrix.target.platform }}
           path: dist/*
           if-no-files-found: error
 
   publish:
-    name: Publish ${{ matrix.version }}
+    name: Publish ${{ matrix.release.version }}
     needs:
       - discover
       - build-darwin
@@ -133,7 +147,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: ${{ fromJSON(needs.discover.outputs.versions) }}
+        release: ${{ fromJSON(needs.discover.outputs.releases) }}
     steps:
       - name: Check out repository
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -141,12 +155,12 @@ jobs:
       - name: Download packaged assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          pattern: release-assets-${{ matrix.version }}-*
+          pattern: release-assets-${{ matrix.release.version }}-*
           path: downloaded-assets
           merge-multiple: true
 
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ matrix.version }}
+          VERSION: ${{ matrix.release.version }}
         run: scripts/publish-release.sh "$VERSION" downloaded-assets
